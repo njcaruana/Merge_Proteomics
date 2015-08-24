@@ -1,0 +1,110 @@
+#Script to merge trinotate file, database fasta file and proteomics file into one.
+
+rm(list=ls())
+
+library(reshape2)
+library(stringr)
+library(seqinr)
+library(splitstackshape)
+
+#Trinotate & Proteomics Merge
+#read in files
+
+trin_data <- read.csv("trinotate_annotation_report.xls",sep="\t",header=TRUE)
+prot_data <- read.table("SAM_Glyco_0820.tabular",sep="\t",header=TRUE, stringsAsFactors = FALSE)
+sa_fasta <- read.fasta("SAustrinum_20152207.fasta", seqtype="AA", as.string=TRUE, set.attributes= FALSE )
+
+#create a column with all the IDs and separate them.
+prot_data <- within(prot_data,prot_ID <- paste(prot_data$protein_name,prot_data$indistinguishable_proteins, sep=';'))
+prot_data <- unique(cSplit(prot_data,"prot_ID", ";","long"))
+
+#code to fix ID names and merge proteome and trinotate file.
+#Select the column with IDs
+prot_ID <- prot_data[,prot_ID]
+
+#Get rid of of lcl| in front of ID and add into dataframe
+prot_ID <- str_replace(prot_ID,"lcl\\|","")
+prot_data$prot_ID <- prot_ID
+
+#edit trin_data IDs
+protein_id <- trin_data[,6]
+protein_id <- str_replace(protein_id,"\\|m","_m")
+trin_data$prot_id <- protein_id
+
+#make prot_data a data frame
+prot_data <- as.data.frame(prot_data)
+ 
+#merge tables together by protein_name
+mergedtable <- merge(prot_data,trin_data,by.x="prot_ID", by.y="prot_id")
+
+#function for aggregating
+aggfun <- function(values){
+  if (class(values)=="numeric"){
+    return(mean(values))
+  }
+  paste(unique(values),collapse=";")
+}
+
+mergedtable1 <- aggregate(mergedtable,by=list(mergedtable$group_number),aggfun)
+
+protein_name <- mergedtable1[,5]
+protein_name <- str_replace(protein_name,"lcl\\|","")
+mergedtable1$protein_name <- protein_name
+
+
+#FASTA merge
+#Change list to a dataframe and transpose into columns
+fasta_df <- as.data.frame(sa_fasta)
+fasta_df <- t(fasta_df)
+
+#change rownames to a column for ID's 
+fastatable <- cbind(ID = rownames(fasta_df), fasta_df)
+
+#write out table
+write.table(fastatable,"fastatable.csv", sep="\t")
+
+#read table back in
+fas_data <- read.csv("fastatable.csv",sep="\t",header=TRUE, row.names=NULL)
+
+#get rid of row names
+fas_data <- fas_data[,-1]  
+  
+#replace the 'lcl' in columns
+ID <- str_replace(fas_data[,1],"lcl.","")
+
+#read in the changed column
+id_column <- as.data.frame(ID)
+
+#turn fas_data into dataframe again
+fas_data <- as.data.frame(fas_data)
+
+#Add column in
+fas_data$ID <- id_column$ID
+
+#Merge the tables
+mergedtable2 <- merge(mergedtable1,fas_data,by.x="prot_ID", by.y="ID")
+
+#Change X to sequence col name
+colnames(mergedtable2)[29] <- "sequence"
+
+
+#Add in novel sequences
+frames <- fas_data[1:53,]
+colnames(frames) <- "protein_name"
+colnames(frames)[2] <- "sequence"
+finaltable <- merge(mergedtable2,frames,all=TRUE)
+
+#Add in sequence lengths and cysteine counts
+finaltable$counts <- str_count(finaltable$sequence,"C")
+finaltable$length <- nchar(gsub("[^A-Z]","",finaltable$sequence))
+
+finaltable <- finaltable[,-4]
+
+#write out 
+write.table(finaltable,"finaltable_SAM_0821.csv", sep="\t", row.names=FALSE, na="")
+
+
+
+
+
+
